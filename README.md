@@ -1,2 +1,35 @@
-# market-live
-한국·미국 지수, 선물, 유가, VIX와 미국 10년 국채금리 모니터
+# 마켓 모니터
+
+한국·미국 지수, 선물, 유가, VIX와 미국 10년 국채금리 등 11개 항목을 한 화면에서 확인합니다.
+
+페이지: https://today8934.github.io/market-live/
+
+## 갱신 방식
+
+- 10개 지표: GitHub Actions가 목표 5분 간격으로 데이터를 수집하고 GitHub Pages에 배포합니다. 화면은 60초마다 새 데이터를 확인합니다.
+- US TECH 100: FOREX.com 나스닥100 현금 CFD의 TradingView 공식 위젯입니다. 위젯이 자체 갱신하며 다른 제공처의 US TECH 100 가격과 다를 수 있습니다.
+- 무료 공개 시세에는 공급자 지연이 있을 수 있습니다. 예약 실행·배포도 지연될 수 있으므로 초 단위 실시간 서비스가 아닙니다.
+- 상단 수집 시각과 카드별 시세 기준 시각을 구분하여 한국시간으로 표시합니다.
+- 수집 실패 시 이전 값과 원래 시각을 유지합니다. 전체 수집 실패 시 기존 배포를 보존합니다.
+- GitHub는 공개 저장소에서 60일간 활동이 없으면 예약 작업을 중지할 수 있습니다. Actions의 실행 기록을 확인하고 필요 시 Enable workflow를 실행하세요.
+
+## 데이터
+
+Yahoo Finance: 코스피, 코스닥, 나스닥 종합, S&P 500, 나스닥100 선물, VIX, Cboe TNX 수익률, WTI·브렌트 최근월물.
+
+KRED: 코스피200 야간선물. 주간 종가 대비 참고 시세이며 거래소 확정 종가와 다를 수 있습니다.
+
+국채금리는 % 단위, 변화는 %p와 bp로 표시합니다. 나스닥 종합·나스닥100 선물·US TECH 100 CFD를 구분합니다.
+
+## 개발
+
+Node.js 22 이상. 별도 패키지와 API 키가 필요하지 않습니다.
+
+```text
+node --test collect.test.mjs
+node collect.mjs
+```
+
+화면 수정: index.template.html. 수집·생성: collect.mjs. 결과: site/index.html 및 site/quotes.json.
+
+GitHub Settings → Pages → Source는 GitHub Actions로 설정합니다.
