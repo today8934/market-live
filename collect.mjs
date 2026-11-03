@@ -8,6 +8,7 @@ export const instruments = [
  {id:'night',name:'코스피200 야간선물',symbol:'KOSPI200NF',group:'kr',unit:'pt',sourceUrl:'https://kred.dev/en/kospi-200-night-futures'},
  {id:'nasdaq',name:'나스닥 종합',symbol:'^IXIC',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EIXIC/'},
  {id:'sp500',name:'S&P 500',symbol:'^GSPC',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EGSPC/'},
+ {id:'sox',name:'필라델피아 반도체 지수',symbol:'^SOX',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5ESOX/'},
  {id:'nq',name:'나스닥100 선물',symbol:'NQ=F',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/NQ%3DF/'},
  {id:'vix',name:'VIX',symbol:'^VIX',group:'macro',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EVIX/'},
  {id:'us10y',name:'미국 10년 국채금리',symbol:'^TNX',group:'macro',unit:'%',sourceUrl:'https://finance.yahoo.com/quote/%5ETNX/'},
