@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext,Script} from 'node:vm';
 import {parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
 const now=Date.parse('2026-11-02T22:00:00Z');
 const fixture=(symbol,price=100,previous=110,time=now/1000-60)=>({chart:{result:[{meta:{symbol,regularMarketPrice:price,previousClose:previous,regularMarketTime:time,shortName:'Test',currentTradingPeriod:{regular:{start:now/1000-3600,end:now/1000+3600}}},timestamp:[now/1000-600,now/1000-300,now/1000-60],indicators:{quote:[{close:[110,null,price]}]}}]}});
@@ -52,4 +54,63 @@ test('daily history verifies the preceding local session when reported percentag
 test('daily-history fallback must not substitute a futures close for its settlement reference',()=>{
  const quote=fixture('NQ=F');Object.assign(quote.chart.result[0].meta,{instrumentType:'FUTURE',exchangeTimezoneName:'America/New_York'});
  assert.throws(()=>verifiedPriorClose(quote,{chart:{result:[{meta:{symbol:'NQ=F',dataGranularity:'1d'}}]}},instruments.find(x=>x.id==='nq')),/reference/);
+});
+
+// Exercise the exact browser calculation so the deployed template cannot drift from these cases.
+const template=readFileSync(new URL('./index.template.html',import.meta.url),'utf8');
+const browserSource=template.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
+new Script(browserSource);
+const periodChange=runInNewContext(browserSource.slice(browserSource.indexOf('function periodChange('),browserSource.indexOf('function selectedChange('))+';periodChange');
+const periodQuote={id:'kosdaq',price:714.95,previousClose:704.39,change:10.56,changePct:1.499169494,asOf:'2026-11-04T06:30:00Z'};
+const points=(start,end=700)=>[{t:Date.parse('2026-10-30T00:00:00Z'),v:start},{t:Date.parse('2026-11-04T06:00:00Z'),v:end}];
+
+test('one-day view preserves the corrected prior-close return instead of intraday return',()=>{
+ const p=periodChange(periodQuote,'1d',points(730),'1일');
+ assert.equal(p.basis,704.39);assert.equal(p.change,10.56);assert.equal(p.changePct.toFixed(2),'1.50');assert.match(p.label,/전일 대비/);
+});
+test('every longer range uses its own first chart value and the displayed current quote',()=>{
+ for(const [range,base] of [['5d',730],['1mo',680],['3mo',650],['6mo',600],['1y',550],['5y',500]]){
+  const p=periodChange(periodQuote,range,points(base),range);
+  assert.equal(p.basis,base);assert.equal(p.change,714.95-base);assert.equal(p.changePct,(714.95-base)/base*100);assert.equal(p.basisAt,points(base)[0].t);
+ }
+ assert.equal(periodQuote.change,10.56);
+});
+test('all instruments use the selected period, including negative, flat and yield changes',()=>{
+ for(const instrument of instruments){
+  const q={...periodQuote,...instrument,price:instrument.id==='us10y'?4.894:100};
+  const p=periodChange(q,instrument.id==='night'?'1h':'1mo',points(instrument.id==='us10y'?4.952:110),'선택 기간');
+  assert.ok(p.change<0);assert.equal(p.basis,instrument.id==='us10y'?4.952:110);
+  if(instrument.id==='us10y')assert.ok(Math.abs(p.change+.058)<1e-9);
+ }
+ assert.equal(periodChange({...periodQuote,price:100},'5d',points(100),'5일').change,0);
+});
+test('missing or failed period requests never fall back to the daily percentage',()=>{
+ for(const entry of [{},{loading:true},{error:true}]){
+  const p=periodChange(periodQuote,'1mo',undefined,'1개월',entry);assert.equal(p.change,null);assert.equal(p.changePct,null);assert.match(p.label,/1개월/);assert.ok(p.message);
+ }
+ const p=periodChange(periodQuote,'1mo',points(680),'1개월',{error:true});assert.equal(p.warning,true);assert.equal(p.basis,680);
+});
+test('invalid baselines, insufficient history and bars after the quote cannot produce returns',()=>{
+ for(const series of [points(0),points(-1),[points(100)[0]],points(100).map(p=>({...p,t:Date.parse('2026-11-05T00:00:00Z')}))]){
+  assert.equal(periodChange(periodQuote,'5d',series,'5일').change,null);
+ }
+ assert.equal(periodChange({...periodQuote,price:null},'5d',points(100),'5일').change,null);
+});
+test('night full-session and hourly selection use distinct comparison baselines',()=>{
+ const q={...periodQuote,id:'night',price:875.1,previousClose:889.85,change:-14.75,changePct:-14.75/889.85*100};
+ assert.equal(periodChange(q,'1d',points(880),'야간장 전체').basis,889.85);
+ for(const range of ['1h','3h','6h']){const p=periodChange(q,range,points(880),range);assert.equal(p.basis,880);assert.ok(Math.abs(p.change+4.9)<1e-9);}
+});
+test('range changes and quote refreshes recompute without leaking a previous period',()=>{
+ const five=periodChange(periodQuote,'5d',points(730),'5일'),month=periodChange(periodQuote,'1mo',points(680),'1개월');
+ assert.ok(five.change<0);assert.ok(month.change>0);
+ assert.equal(periodChange({...periodQuote,price:720},'1mo',points(680),'1개월').change,40);
+ assert.equal(periodChange(periodQuote,'1d',points(730),'1일').change,10.56);
+});
+test('period charts end at the displayed latest quote without mutating cached history',()=>{
+ const align=runInNewContext(browserSource.slice(browserSource.indexOf('function alignPeriodSeries('),browserSource.indexOf('function chartSeries('))+';alignPeriodSeries');
+ const source=points(730),aligned=align(periodQuote,source);
+ assert.equal(aligned.at(-1).v,714.95);assert.equal(aligned.at(-1).t,Date.parse(periodQuote.asOf));assert.equal(source.length,2);assert.equal(source.at(-1).v,700);
+ assert.equal(align(periodQuote,aligned).length,aligned.length);
+ assert.equal(align(periodQuote,[source[0]]).length,1);
 });
