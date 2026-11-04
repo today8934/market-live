@@ -46,14 +46,44 @@ export function yahooDayChange(m) {
  const changePct=change/previousClose*100;
  const reportedPercents=[m.regularMarketChangePercent,...(sameFullDayPrice?[m.fulldayChangePercent]:[])].filter(finite);
  // Providers may round percentages to two decimals. Larger disagreement is unsafe.
- if(reportedPercents.some(p=>Math.abs(p-changePct)>.0051))throw Error('Daily change disagrees with reported percentage');
+ if(reportedPercents.some(p=>Math.abs(p-changePct)>.0051)){const error=Error('Daily change disagrees with reported percentage');error.code='DAY_CHANGE_MISMATCH';throw error;}
  return {previousClose,change,changePct,changeBasis};
 }
 
-export function parseYahoo(j, instrument, now=Date.now()) {
+export function verifiedPriorClose(quoteJson, historyJson, instrument) {
+ const m=quoteJson.chart?.result?.[0]?.meta,r=historyJson.chart?.result?.[0];
+ if(m?.symbol!==instrument.symbol||m.instrumentType!=='INDEX'||r?.meta?.symbol!==instrument.symbol||r.meta.dataGranularity!=='1d'||!m.exchangeTimezoneName)throw Error('Cannot verify daily reference');
+ const day=t=>new Intl.DateTimeFormat('en-CA',{timeZone:m.exchangeTimezoneName,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t*1000));
+ const quoteDay=day(m.regularMarketTime);
+ const rows=(r.timestamp??[]).map((t,i)=>({t,day:day(t),close:r.indicators?.quote?.[0]?.close?.[i]})).filter(b=>finite(b.t)&&finite(b.close)&&b.close>0).sort((a,b)=>a.t-b.t);
+ // Require the quote's actual local trading day, not just the last returned bar.
+ if(!rows.some(b=>b.day===quoteDay))throw Error('Current trading day absent from history');
+ const prior=rows.filter(b=>b.day<quoteDay).at(-1);
+ if(!prior||m.regularMarketTime-prior.t>7*86400)throw Error('Prior session not verifiable');
+ const decimals=Number.isInteger(m.priceHint)&&m.priceHint>=0&&m.priceHint<=8?m.priceHint:4;
+ return {price:Number(prior.close.toFixed(decimals)),date:prior.day};
+}
+
+export async function parseYahooWithHistory(j,instrument,now=Date.now()) {
+ try{return parseYahoo(j,instrument,now)}catch(error){
+  if(error.code!=='DAY_CHANGE_MISMATCH')throw error;
+  for(const host of ['query1','query2']){
+   try{
+    const daily=await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+encodeURIComponent(instrument.symbol)+'?interval=1d&range=5d');
+    const reference=verifiedPriorClose(j,daily,instrument);
+    return parseYahoo(j,instrument,now,reference);
+   }catch{}
+  }
+  throw Error('Could not independently verify daily change');
+ }
+}
+
+export function parseYahoo(j, instrument, now=Date.now(), verifiedReference) {
  const r=j.chart?.result?.[0];const m=r?.meta;
  if(!m||m.symbol!==instrument.symbol)throw new Error('Missing or mismatched instrument');
- const price=m.regularMarketPrice,{previousClose,change,changePct,changeBasis}=yahooDayChange(m);
+ const price=m.regularMarketPrice;
+ const daily=verifiedReference?{previousClose:verifiedReference.price,change:price-verifiedReference.price,changePct:(price-verifiedReference.price)/verifiedReference.price*100,changeBasis:'dailyHistory',referenceDate:verifiedReference.date}:yahooDayChange(m);
+ const {previousClose,change,changePct,changeBasis}=daily;
  const period=m.currentTradingPeriod?.regular;
  let marketState=period&&now/1000>=period.start&&now/1000<period.end?'OPEN':'CLOSED';
  if(instrument.symbol.endsWith('=F')){
@@ -62,7 +92,7 @@ export function parseYahoo(j, instrument, now=Date.now()) {
   if(day==='Sat'||(day==='Sun'&&hour<18)||(day==='Fri'&&hour>=17)||hour===17)marketState='CLOSED';
  }
  const series=sample((r.timestamp??[]).map((t,i)=>({t:t*1000,v:r.indicators?.quote?.[0]?.close?.[i]})));
- return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,
+ return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,...(daily.referenceDate?{referenceDate:daily.referenceDate}:{}),
   asOf:new Date(m.regularMarketTime*1000).toISOString(),collectedAt:new Date(now).toISOString(),
   high:m.regularMarketDayHigh??null,low:m.regularMarketDayLow??null,
   marketState,sessionEnd:period?new Date(period.end*1000).toISOString():null,
@@ -115,7 +145,7 @@ export async function collect() {
    else{
     let j;
     for(const host of ['query1','query2']){try{j=await request(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(instrument.symbol)}?interval=5m&range=1d`);break}catch{}}
-    if(!j)throw new Error('Both price endpoints failed');q=parseYahoo(j,instrument);
+    if(!j)throw new Error('Both price endpoints failed');q=await parseYahooWithHistory(j,instrument);
    }
    console.log(`${q.id}: ${q.price} / ${q.asOf}`);return q;
   }catch(e){console.warn(`${instrument.id}: ${e.message}`);return failedQuote(instrument,previous.quotes?.find(q=>q.id===instrument.id));}
