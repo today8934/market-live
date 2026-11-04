@@ -28,11 +28,33 @@ function sample(series,limit=90) {
  if(valid.length<=limit)return valid;
  return Array.from({length:limit},(_,i)=>valid[Math.round(i*(valid.length-1)/(limit-1))]);
 }
+// Chart metadata can retain an older close even while the current quote updates.
+// Use the provider's paired daily price/change first, then cross-check its percent.
+export function yahooDayChange(m) {
+ const price=m.regularMarketPrice;
+ const sameFullDayPrice=finite(m.fulldayPrice)&&finite(price)&&Math.abs(m.fulldayPrice-price)<=Math.max(1e-8,Math.abs(price)*1e-10);
+ let change,previousClose,changeBasis;
+ if(finite(m.regularMarketChange)){
+  change=m.regularMarketChange;previousClose=price-change;changeBasis='regularMarketChange';
+ }else if(sameFullDayPrice&&finite(m.fulldayChange)){
+  change=m.fulldayChange;previousClose=price-change;changeBasis='fulldayChange';
+ }else{
+  previousClose=finite(m.previousClose)?m.previousClose:m.range==='1d'?m.chartPreviousClose:undefined;
+  change=price-previousClose;changeBasis='previousClose';
+ }
+ if(!finite(price)||!finite(previousClose)||previousClose<=0||!finite(change))throw Error('Invalid daily change basis');
+ const changePct=change/previousClose*100;
+ const reportedPercents=[m.regularMarketChangePercent,...(sameFullDayPrice?[m.fulldayChangePercent]:[])].filter(finite);
+ // Providers may round percentages to two decimals. Larger disagreement is unsafe.
+ if(reportedPercents.some(p=>Math.abs(p-changePct)>.0051))throw Error('Daily change disagrees with reported percentage');
+ return {previousClose,change,changePct,changeBasis};
+}
+
 export function parseYahoo(j, instrument, now=Date.now()) {
  const r=j.chart?.result?.[0];const m=r?.meta;
  if(!m||m.symbol!==instrument.symbol)throw new Error('Missing or mismatched instrument');
- const price=m.regularMarketPrice, previousClose=m.previousClose??m.chartPreviousClose;
- const change=price-previousClose,period=m.currentTradingPeriod?.regular;
+ const price=m.regularMarketPrice,{previousClose,change,changePct,changeBasis}=yahooDayChange(m);
+ const period=m.currentTradingPeriod?.regular;
  let marketState=period&&now/1000>=period.start&&now/1000<period.end?'OPEN':'CLOSED';
  if(instrument.symbol.endsWith('=F')){
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',hourCycle:'h23'}).formatToParts(new Date(now));
@@ -40,7 +62,7 @@ export function parseYahoo(j, instrument, now=Date.now()) {
   if(day==='Sat'||(day==='Sun'&&hour<18)||(day==='Fri'&&hour>=17)||hour===17)marketState='CLOSED';
  }
  const series=sample((r.timestamp??[]).map((t,i)=>({t:t*1000,v:r.indicators?.quote?.[0]?.close?.[i]})));
- return validateQuote({...instrument,price,previousClose,change,changePct:change/previousClose*100,
+ return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,
   asOf:new Date(m.regularMarketTime*1000).toISOString(),collectedAt:new Date(now).toISOString(),
   high:m.regularMarketDayHigh??null,low:m.regularMarketDayLow??null,
   marketState,sessionEnd:period?new Date(period.end*1000).toISOString():null,
