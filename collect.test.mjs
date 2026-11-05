@@ -47,6 +47,7 @@ test('daily history verifies the preceding local session when reported percentag
  assert.deepEqual(reference,{price:20.83,date:'2026-11-03'});
  const q=parseYahoo(quote,instrument,Date.parse('2026-11-04T21:11:00Z'),reference);
  assert.equal(q.changeBasis,'dailyHistory');assert.equal(q.previousClose,20.83);assert.equal(q.changePct.toFixed(2),'-18.72');
+ daily.chart.result[0].indicators.quote[0].close[2]=null;assert.equal(verifiedPriorClose(quote,daily,instrument).price,20.83);
  daily.chart.result[0].timestamp.pop();daily.chart.result[0].indicators.quote[0].close.pop();
  assert.throws(()=>verifiedPriorClose(quote,daily,instrument),/absent/);
  daily.chart.result[0].meta.symbol='^GSPC';assert.throws(()=>verifiedPriorClose(quote,daily,instrument),/reference/);
@@ -128,8 +129,10 @@ test('after-hours uses the same-day regular close, including early market closes
  const j={chart:{result:[{meta:{symbol:'SOXQ',instrumentType:'ETF',hasPrePostMarketData:true,regularMarketPrice:80,regularMarketTime:regular.end+1,previousClose:75,tradingPeriods:{regular:[[regular]],post:[[post]]}},timestamp:[regular.end-300,post.start+300,post.start+600],indicators:{quote:[{close:[79,78,77]}]}}]}};
  const q=parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z'));assert.equal(q.session,'POST');assert.equal(q.change,-3);assert.equal(q.regularClose,80);
  j.chart.result[0].meta.regularMarketTime=regular.end+86400;j.chart.result[0].meta.regularMarketPrice=150;
- assert.equal(parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z')).regularClose,79);
- j.chart.result[0].indicators.quote[0].close[0]=null;assert.throws(()=>parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z')),/close/);
+ assert.throws(()=>parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z')),/required/);
+ const daily={chart:{result:[{meta:{symbol:'SOXQ',dataGranularity:'1d'},timestamp:[regular.start],indicators:{quote:[{close:[80.10000001]}]}}]}};
+ assert.equal(parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z'),daily).regularClose,80.1);
+ daily.chart.result[0].indicators.quote[0].close[0]=null;assert.throws(()=>parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z'),daily),/close/);
 });
 test('old after-hours quotes retain their actual session and timestamp; missing data is rejected',()=>{
  const end=Date.parse('2026-11-04T21:00:00Z')/1000;
