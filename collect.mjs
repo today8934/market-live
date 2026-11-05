@@ -95,7 +95,7 @@ export function parseYahoo(j, instrument, now=Date.now(), verifiedReference) {
  return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,...(daily.referenceDate?{referenceDate:daily.referenceDate}:{}),
   asOf:new Date(m.regularMarketTime*1000).toISOString(),collectedAt:new Date(now).toISOString(),
   high:m.regularMarketDayHigh??null,low:m.regularMarketDayLow??null,
-  marketState,sessionEnd:period?new Date(period.end*1000).toISOString():null,
+  marketState,sessionEnd:period?new Date(period.end*1000).toISOString():null,...(instrument.id==='vix'?vixSession(m,now):{}),
   source:'Yahoo Finance',delayNote:'공개 시세 · 지연 가능',contract:m.shortName??instrument.symbol,
   series,unavailable:false,collectionError:false},now);
 }
@@ -124,12 +124,49 @@ export function parseNight(html,now=Date.now()) {
   source:'KRED',contract:s.futures_code,delayNote:'외부 참고 시세 · 주간 종가 대비',
   sessionDate:s.session_date,series:sample(bars.map(b=>({t:b.time*1000,v:b.close}))),unavailable:false,collectionError:false},now);
 }
+export const extendedReferences={nasdaq:{symbol:'ONEQ',name:'나스닥 종합 추종 ETF'},sp500:{symbol:'SPY',name:'S&P 500 추종 ETF'},sox:{symbol:'SOXQ',name:'반도체 지수 추종 ETF'}};
+export function parseExtended(j,reference,now=Date.now()){
+ const r=j.chart?.result?.[0],m=r?.meta;
+ if(m?.symbol!==reference.symbol||m.instrumentType!=='ETF'||!m.hasPrePostMarketData)throw Error('Unsupported extended quote');
+ const periods=kind=>[...(m.tradingPeriods?.[kind]??[]).flat(),m.currentTradingPeriod?.[kind]].filter(p=>p&&finite(p.start)&&finite(p.end)&&p.end>p.start);
+ const pre=periods('pre'),post=periods('post'),regular=periods('regular');
+ const windows=[...pre.map(p=>({...p,session:'PRE'})),...post.map(p=>({...p,session:'POST'}))];
+ const rows=(r.timestamp??[]).map((t,i)=>({t,v:r.indicators?.quote?.[0]?.close?.[i]})).filter(p=>finite(p.t)&&p.t*1000<=now+60000&&finite(p.v)&&p.v>0).sort((a,b)=>a.t-b.t);
+ const last=rows.filter(p=>windows.some(w=>p.t>=w.start&&p.t<w.end)).at(-1);
+ if(!last||now-last.t*1000>7*86400000)throw Error('No recent extended quote');
+ const window=windows.find(w=>last.t>=w.start&&last.t<w.end);
+ const prior=regular.filter(p=>p.end<=window.start).sort((a,b)=>a.end-b.end).at(-1);
+ if(!prior)throw Error('Regular close not verifiable');
+ // Pair the extended session with its immediately preceding regular session, including early closes.
+ const matchingMeta=m.regularMarketTime>=prior.start&&m.regularMarketTime<=prior.end+300;
+ const base=matchingMeta&&finite(m.regularMarketPrice)&&m.regularMarketPrice>0?m.regularMarketPrice:rows.filter(p=>p.t>=prior.start&&p.t<prior.end).at(-1)?.v;
+ if(!finite(base)||base<=0)throw Error('Missing matching regular close');
+ const price=Number(last.v.toFixed(4)),change=price-base;
+ return {...reference,price,change,changePct:change/base*100,regularClose:base,referenceTime:new Date(prior.end*1000).toISOString(),asOf:new Date(last.t*1000).toISOString(),collectedAt:new Date(now).toISOString(),session:window.session,sessionStart:new Date(window.start*1000).toISOString(),sessionEnd:new Date(window.end*1000).toISOString(),series:sample(rows.filter(p=>p.t>=window.start&&p.t<window.end).map(p=>({t:p.t*1000,v:p.v}))),source:'Yahoo Finance',sourceUrl:'https://finance.yahoo.com/quote/'+reference.symbol+'/',collectionError:false};
+}
+export function vixSession(m,now=Date.now()){
+ const r=m.currentTradingPeriod?.regular,day=t=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t));
+ if(!r||day(now)!==day(m.regularMarketTime*1000)||now-m.regularMarketTime*1000>30*60000)return {marketState:'CLOSED',marketSession:null,sessionEnd:r?new Date(r.end*1000).toISOString():null};
+ const t=now/1000,early=t>=r.start-375*60&&t<r.start-5*60,normal=t>=r.start&&t<r.end+15*60;
+ return {marketState:early||normal?'OPEN':'CLOSED',marketSession:early?'EXTENDED':normal?'REGULAR':null,sessionEnd:new Date((early?r.start-5*60:r.end+15*60)*1000).toISOString()};
+}
+export async function attachExtended(quotes,previous={quotes:[]}){
+ await Promise.all(Object.entries(extendedReferences).map(async([id,reference])=>{
+  const q=quotes.find(q=>q.id===id);if(!q)return;
+  for(const host of ['query1','query2']){
+   try{q.extended=parseExtended(await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol+'?range=5d&interval=5m&includePrePost=true',true,6000),reference);return}catch{}
+  }
+  const old=previous.quotes?.find(q=>q.id===id)?.extended;
+  q.extended=old?{...old,collectionError:true}:{...reference,price:null,collectionError:true};
+ }));return quotes;
+}
+
 export function failedQuote(instrument, previous) {
  if(previous&&previous.id===instrument.id&&finite(previous.price))return {...previous,collectionError:true,error:'수집 실패 · 이전 시세 유지'};
  return {...instrument,price:null,previousClose:null,change:null,changePct:null,asOf:null,collectedAt:null,series:[],unavailable:true,collectionError:true,error:'시세를 불러오지 못했습니다'};
 }
-async function request(url,asJson=true) {
- const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; MarketMonitor/1.0)','Accept':asJson?'application/json':'text/html'},signal:AbortSignal.timeout(18000)});
+async function request(url,asJson=true,timeout=18000) {
+ const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0 (compatible; MarketMonitor/1.0)','Accept':asJson?'application/json':'text/html'},signal:AbortSignal.timeout(timeout)});
  if(!r.ok)throw new Error('HTTP '+r.status);
  return asJson?r.json():r.text();
 }
@@ -138,18 +175,20 @@ export async function collect() {
  let previous={quotes:[]};
  if(process.env.PREVIOUS_DATA_URL){try{previous=await request(process.env.PREVIOUS_DATA_URL)}catch{}}
  else{try{previous=JSON.parse(await readFile(root+'/quotes.json','utf8'))}catch{}}
+ const referenceTask=attachExtended(Object.keys(extendedReferences).map(id=>({id})),previous);
  const quotes=await Promise.all(instruments.map(async instrument=>{
   try{
    let q;
    if(instrument.id==='night')q=parseNight(await request(instrument.sourceUrl,false));
    else{
     let j;
-    for(const host of ['query1','query2']){try{j=await request(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(instrument.symbol)}?interval=5m&range=1d`);break}catch{}}
+    for(const host of ['query1','query2']){try{j=await request(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(instrument.symbol)}?interval=5m&range=1d&includePrePost=true`);break}catch{}}
     if(!j)throw new Error('Both price endpoints failed');q=await parseYahooWithHistory(j,instrument);
    }
    console.log(`${q.id}: ${q.price} / ${q.asOf}`);return q;
   }catch(e){console.warn(`${instrument.id}: ${e.message}`);return failedQuote(instrument,previous.quotes?.find(q=>q.id===instrument.id));}
  }));
+ const references=await referenceTask;for(const q of quotes){const ref=references.find(r=>r.id===q.id);if(ref)q.extended=ref.extended}
  const output={schemaVersion:1,generatedAt:new Date().toISOString(),targetIntervalMinutes:5,quotes};
  await writeFile(root+'/quotes.json',JSON.stringify(output));
  let template=await readFile(new URL('./index.template.html',import.meta.url),'utf8');
