@@ -44,3 +44,11 @@ node collect.mjs
 화면 수정: index.template.html. 수집·생성: collect.mjs. 결과: site/index.html 및 site/quotes.json.
 
 GitHub Settings → Pages → Source는 GitHub Actions로 설정합니다.
+
+## 프리·애프터 및 야간 시세
+
+- 미국 현물지수 아래에 별도 추종 ETF 참고 시세를 표시합니다: 나스닥 종합 ONEQ, S&P 500 SPY, 반도체 지수 SOXQ. 지수 값·차트와 섞지 않습니다.
+- ETF의 실제 거래 세션 시간표로 프리/애프터를 분류하고, 직전 정규장 종가와 비교합니다. 지난 세션·수집 실패·지연을 구분하며 원래 시세 시각을 유지합니다.
+- Yahoo 차트 요청은 제공되는 확장시간 데이터도 포함합니다. 선물·유가는 전자거래 세션, 야간선물은 야간장, US TECH 100은 CFD 세션을 사용합니다.
+- VIX는 정규/확장 산출시간을 구분합니다. 코스피·코스닥과 Cboe TNX에는 별도 프리/애프터 시세를 만들어 넣지 않습니다.
+- 브렌트 BZ=F는 NYMEX Brent Last Day Financial 선물입니다.
