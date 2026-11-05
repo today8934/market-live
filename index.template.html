@@ -60,7 +60,7 @@ function alignPeriodSeries(q,series){
 function chartSeries(q){const range=selectedRange(q);if(q.id==='night'){const end=q.series?.at(-1)?.t;return range==='1d'?q.series:(q.series??[]).filter(p=>p.t>=end-Number(range.slice(0,-1))*3600000)}return range==='1d'?q.series:alignPeriodSeries(q,historyCache.get(q.id+':'+range)?.series)}
 function chartMarkup(q){
  const range=selectedRange(q),entry=historyCache.get(q.id+':'+range),series=chartSeries(q),labels=q.id==='night'?nightLabels:rangeLabels;
- const chart=series?.length>=2?drawSeries({...q,series},range):`<div class="no-chart" role="status">${entry?.error?'해당 기간의 차트를 불러오지 못했습니다.':entry?.loading?'선택한 기간의 차트를 불러오는 중…':q.id==='night'?'이 시간대의 차트 데이터가 부족합니다.':range==='1d'?'최근 거래일의 차트 데이터가 없습니다.':'선택한 기간의 차트를 준비하고 있습니다.'}${entry?.error?` <button class="chart-retry" data-chart-retry="${q.id}">다시 시도</button>`:''}</div>`;
+ const chart=series?.length>=2?drawSeries({...q,series},range):`<div class="no-chart" role="status">${range==='1d'&&q.chartNote?safe(q.chartNote):entry?.error?'해당 기간의 차트를 불러오지 못했습니다.':entry?.loading?'선택한 기간의 차트를 불러오는 중…':q.id==='night'?'이 시간대의 차트 데이터가 부족합니다.':range==='1d'?'최근 거래일의 차트 데이터가 없습니다.':'선택한 기간의 차트를 준비하고 있습니다.'}${entry?.error?` <button class="chart-retry" data-chart-retry="${q.id}">다시 시도</button>`:''}</div>`;
  const note=q.id==='night'?'제공 범위: 최근 야간장 · '+labels[range]:labels[range]+' · '+intervalLabels[range]+(range==='1d'?'':' · 끝값은 최신 시세');
  const state=entry?.loading?' · 조회 중':entry?.error?' · 연결 실패, 이 기간의 이전 차트 유지':entry?.collectedAt?' · 조회 '+time(entry.collectedAt)+' KST':'';
  return chart+`<p class="chart-caption${entry?.error?' chart-warning':''}">${safe(note+(series?.length>=2||entry?.loading?state:''))}</p>`;
