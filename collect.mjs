@@ -57,7 +57,7 @@ export function verifiedPriorClose(quoteJson, historyJson, instrument) {
  const quoteDay=day(m.regularMarketTime);
  const rows=(r.timestamp??[]).map((t,i)=>({t,day:day(t),close:r.indicators?.quote?.[0]?.close?.[i]})).filter(b=>finite(b.t)&&finite(b.close)&&b.close>0).sort((a,b)=>a.t-b.t);
  // Require the quote's actual local trading day, not just the last returned bar.
- if(!rows.some(b=>b.day===quoteDay))throw Error('Current trading day absent from history');
+ if(!(r.timestamp??[]).some(t=>finite(t)&&day(t)===quoteDay))throw Error('Current trading day absent from history');
  const prior=rows.filter(b=>b.day<quoteDay).at(-1);
  if(!prior||m.regularMarketTime-prior.t>7*86400)throw Error('Prior session not verifiable');
  const decimals=Number.isInteger(m.priceHint)&&m.priceHint>=0&&m.priceHint<=8?m.priceHint:4;
@@ -92,7 +92,7 @@ export function parseYahoo(j, instrument, now=Date.now(), verifiedReference) {
   if(day==='Sat'||(day==='Sun'&&hour<18)||(day==='Fri'&&hour>=17)||hour===17)marketState='CLOSED';
  }
  let series=sample((r.timestamp??[]).map((t,i)=>({t:t*1000,v:r.indicators?.quote?.[0]?.close?.[i]})));
- const gap=m.regularMarketTime*1000-(series.at(-1)?.t??0);const chartNote=instrument.id==='vix'&&vixSession(m,m.regularMarketTime*1000).marketSession==='EXTENDED'&&gap>3600000?'확장시간 분봉 미제공 · 최신 값은 위 시세에 표시':'';if(chartNote)series=[];
+ const gap=m.regularMarketTime*1000-(series.at(-1)?.t??0);const chartNote=instrument.id==='vix'&&gap>3600000?'최신 세션 분봉 미제공 · 최신 값은 위 시세에 표시':'';if(chartNote)series=[];
  return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,chartNote,...(daily.referenceDate?{referenceDate:daily.referenceDate}:{}),
   asOf:new Date(m.regularMarketTime*1000).toISOString(),collectedAt:new Date(now).toISOString(),
   high:m.regularMarketDayHigh??null,low:m.regularMarketDayLow??null,
@@ -126,7 +126,7 @@ export function parseNight(html,now=Date.now()) {
   sessionDate:s.session_date,series:sample(bars.map(b=>({t:b.time*1000,v:b.close}))),unavailable:false,collectionError:false},now);
 }
 export const extendedReferences={nasdaq:{symbol:'ONEQ',name:'나스닥 종합 추종 ETF'},sp500:{symbol:'SPY',name:'S&P 500 추종 ETF'},sox:{symbol:'SOXQ',name:'반도체 지수 추종 ETF'}};
-export function parseExtended(j,reference,now=Date.now()){
+export function parseExtended(j,reference,now=Date.now(),dailyJson){
  const r=j.chart?.result?.[0],m=r?.meta;
  if(m?.symbol!==reference.symbol||m.instrumentType!=='ETF'||!m.hasPrePostMarketData)throw Error('Unsupported extended quote');
  const periods=kind=>[...(m.tradingPeriods?.[kind]??[]).flat(),m.currentTradingPeriod?.[kind]].filter(p=>p&&finite(p.start)&&finite(p.end)&&p.end>p.start);
@@ -140,7 +140,13 @@ export function parseExtended(j,reference,now=Date.now()){
  if(!prior)throw Error('Regular close not verifiable');
  // Pair the extended session with its immediately preceding regular session, including early closes.
  const matchingMeta=m.regularMarketTime>=prior.start&&m.regularMarketTime<=prior.end+300;
- const base=matchingMeta&&finite(m.regularMarketPrice)&&m.regularMarketPrice>0?m.regularMarketPrice:rows.filter(p=>p.t>=prior.start&&p.t<prior.end).at(-1)?.v;
+ let base=matchingMeta&&finite(m.regularMarketPrice)&&m.regularMarketPrice>0?m.regularMarketPrice:undefined;
+ if(!finite(base)){
+  if(!dailyJson){const error=Error('Daily regular close required');error.code='EXTENDED_REFERENCE_REQUIRED';throw error;}
+  const daily=dailyJson.chart?.result?.[0];if(daily?.meta?.symbol!==reference.symbol||daily.meta.dataGranularity!=='1d')throw Error('Mismatched daily close');
+  const index=(daily.timestamp??[]).findIndex(t=>t>=prior.start&&t<prior.end);const close=daily.indicators?.quote?.[0]?.close?.[index];
+  if(finite(close))base=Number(close.toFixed(Number.isInteger(m.priceHint)?Math.min(8,Math.max(0,m.priceHint)):2));
+ }
  if(!finite(base)||base<=0)throw Error('Missing matching regular close');
  const price=Number(last.v.toFixed(4)),change=price-base;
  return {...reference,price,change,changePct:change/base*100,regularClose:base,referenceTime:new Date(prior.end*1000).toISOString(),asOf:new Date(last.t*1000).toISOString(),collectedAt:new Date(now).toISOString(),session:window.session,sessionStart:new Date(window.start*1000).toISOString(),sessionEnd:new Date(window.end*1000).toISOString(),series:sample(rows.filter(p=>p.t>=window.start&&p.t<window.end).map(p=>({t:p.t*1000,v:p.v}))),source:'Yahoo Finance',sourceUrl:'https://finance.yahoo.com/quote/'+reference.symbol+'/',collectionError:false};
@@ -155,7 +161,14 @@ export async function attachExtended(quotes,previous={quotes:[]}){
  await Promise.all(Object.entries(extendedReferences).map(async([id,reference])=>{
   const q=quotes.find(q=>q.id===id);if(!q)return;
   for(const host of ['query1','query2']){
-   try{q.extended=parseExtended(await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol+'?range=5d&interval=5m&includePrePost=true',true,6000),reference);return}catch{}
+   try{
+    const raw=await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol+'?range=5d&interval=5m&includePrePost=true',true,4000);
+    try{q.extended=parseExtended(raw,reference)}catch(error){
+     if(error.code!=='EXTENDED_REFERENCE_REQUIRED')throw error;
+     const daily=await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol+'?range=5d&interval=1d',true,4000);
+     q.extended=parseExtended(raw,reference,Date.now(),daily);
+    }return;
+   }catch{}
   }
   const old=previous.quotes?.find(q=>q.id===id)?.extended;
   q.extended=old?{...old,collectionError:true}:{...reference,price:null,collectionError:true};
