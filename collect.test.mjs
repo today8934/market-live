@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext,Script} from 'node:vm';
-import {parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
+import {parseExtended,vixSession,parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
 const now=Date.parse('2026-11-02T22:00:00Z');
 const fixture=(symbol,price=100,previous=110,time=now/1000-60)=>({chart:{result:[{meta:{symbol,regularMarketPrice:price,previousClose:previous,regularMarketTime:time,shortName:'Test',currentTradingPeriod:{regular:{start:now/1000-3600,end:now/1000+3600}}},timestamp:[now/1000-600,now/1000-300,now/1000-60],indicators:{quote:[{close:[110,null,price]}]}}]}});
 test('price changes use previous close and preserve original timestamps',()=>{const q=parseYahoo(fixture('^GSPC'),instruments.find(x=>x.id==='sp500'),now);assert.equal(q.change,-10);assert.equal(q.changePct,-10/110*100);assert.equal(q.asOf,'2026-11-02T21:59:00.000Z');assert.equal(q.series.length,2)});
@@ -113,4 +113,35 @@ test('period charts end at the displayed latest quote without mutating cached hi
  assert.equal(aligned.at(-1).v,714.95);assert.equal(aligned.at(-1).t,Date.parse(periodQuote.asOf));assert.equal(source.length,2);assert.equal(source.at(-1).v,700);
  assert.equal(align(periodQuote,aligned).length,aligned.length);
  assert.equal(align(periodQuote,[source[0]]).length,1);
+});
+
+test('extended ETF quotes compare premarket to the preceding regular close across DST',()=>{
+ const ms=s=>Date.parse(s),sec=s=>ms(s)/1000,reference={symbol:'SPY',name:'S&P 500 추종 ETF'};
+ const prior={start:sec('2026-10-30T13:30:00Z'),end:sec('2026-10-30T20:00:00Z')},pre={start:sec('2026-11-02T09:00:00Z'),end:sec('2026-11-02T14:30:00Z')};
+ const j={chart:{result:[{meta:{symbol:'SPY',instrumentType:'ETF',hasPrePostMarketData:true,regularMarketPrice:100,regularMarketTime:prior.end,tradingPeriods:{regular:[[prior]],pre:[[pre]],post:[]}},timestamp:[prior.end-300,pre.start,pre.start+300],indicators:{quote:[{close:[99,101,102]}]}}]}};
+ const q=parseExtended(j,reference,ms('2026-11-02T09:10:00Z'));
+ assert.equal(q.session,'PRE');assert.equal(q.price,102);assert.equal(q.regularClose,100);assert.equal(q.change,2);assert.equal(q.changePct,2);assert.equal(q.series.length,2);
+ j.chart.result[0].meta.symbol='^GSPC';assert.throws(()=>parseExtended(j,reference),/Unsupported/);
+});
+test('after-hours uses the same-day regular close, including early market closes',()=>{
+ const sec=s=>Date.parse(s)/1000,regular={start:sec('2026-11-27T14:30:00Z'),end:sec('2026-11-27T18:00:00Z')},post={start:regular.end,end:sec('2026-11-27T22:00:00Z')};
+ const j={chart:{result:[{meta:{symbol:'SOXQ',instrumentType:'ETF',hasPrePostMarketData:true,regularMarketPrice:80,regularMarketTime:regular.end+1,previousClose:75,tradingPeriods:{regular:[[regular]],post:[[post]]}},timestamp:[regular.end-300,post.start+300,post.start+600],indicators:{quote:[{close:[79,78,77]}]}}]}};
+ const q=parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z'));assert.equal(q.session,'POST');assert.equal(q.change,-3);assert.equal(q.regularClose,80);
+ j.chart.result[0].meta.regularMarketTime=regular.end+86400;j.chart.result[0].meta.regularMarketPrice=150;
+ assert.equal(parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z')).regularClose,79);
+ j.chart.result[0].indicators.quote[0].close[0]=null;assert.throws(()=>parseExtended(j,{symbol:'SOXQ'},Date.parse('2026-11-27T19:00:00Z')),/close/);
+});
+test('old after-hours quotes retain their actual session and timestamp; missing data is rejected',()=>{
+ const end=Date.parse('2026-11-04T21:00:00Z')/1000;
+ const j={chart:{result:[{meta:{symbol:'ONEQ',instrumentType:'ETF',hasPrePostMarketData:true,regularMarketPrice:100,regularMarketTime:end,tradingPeriods:{regular:[[{start:end-23400,end}]],post:[[{start:end,end:end+14400}]],pre:[[{start:end+43200,end:end+63000}]]}},timestamp:[end+300],indicators:{quote:[{close:[101]}]}}]}};
+ const q=parseExtended(j,{symbol:'ONEQ'},(end+45000)*1000);assert.equal(q.session,'POST');assert.equal(q.asOf,new Date((end+300)*1000).toISOString());assert.equal(q.sessionEnd,new Date((end+14400)*1000).toISOString());
+ assert.throws(()=>parseExtended(j,{symbol:'ONEQ'},(end+8*86400)*1000),/recent/);
+ j.chart.result[0].indicators.quote[0].close=[null];assert.throws(()=>parseExtended(j,{symbol:'ONEQ'},(end+45000)*1000),/recent/);
+});
+test('VIX is marked as extended calculation only with a recent quote in its calculation window',()=>{
+ const now=Date.parse('2026-11-05T09:20:00Z'),m={regularMarketTime:now/1000-60,currentTradingPeriod:{regular:{start:Date.parse('2026-11-05T14:30:00Z')/1000,end:Date.parse('2026-11-05T21:00:00Z')/1000}}};
+ assert.equal(vixSession(m,now).marketSession,'EXTENDED');assert.equal(vixSession(m,now).marketState,'OPEN');
+ assert.equal(vixSession({...m,regularMarketTime:m.regularMarketTime-86400},now).marketState,'CLOSED');
+ assert.equal(vixSession(m,Date.parse('2026-11-05T14:27:00Z')).marketState,'CLOSED');
+ const after=Date.parse('2026-11-05T21:10:00Z');assert.equal(vixSession({...m,regularMarketTime:after/1000-60},after).marketSession,'REGULAR');
 });
