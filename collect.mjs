@@ -65,7 +65,7 @@ export function verifiedPriorClose(quoteJson, historyJson, instrument) {
 }
 
 export async function parseYahooWithHistory(j,instrument,now=Date.now()) {
- try{return parseYahoo(j,instrument,now)}catch(error){
+ try{if(instrument.id==='vix'){const error=Error('Verify VIX daily close across sessions');error.code='DAY_CHANGE_MISMATCH';throw error}return parseYahoo(j,instrument,now)}catch(error){
   if(error.code!=='DAY_CHANGE_MISMATCH')throw error;
   for(const host of ['query1','query2']){
    try{
@@ -91,8 +91,9 @@ export function parseYahoo(j, instrument, now=Date.now(), verifiedReference) {
   const day=parts.find(p=>p.type==='weekday').value,hour=Number(parts.find(p=>p.type==='hour').value);
   if(day==='Sat'||(day==='Sun'&&hour<18)||(day==='Fri'&&hour>=17)||hour===17)marketState='CLOSED';
  }
- const series=sample((r.timestamp??[]).map((t,i)=>({t:t*1000,v:r.indicators?.quote?.[0]?.close?.[i]})));
- return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,...(daily.referenceDate?{referenceDate:daily.referenceDate}:{}),
+ let series=sample((r.timestamp??[]).map((t,i)=>({t:t*1000,v:r.indicators?.quote?.[0]?.close?.[i]})));
+ const gap=m.regularMarketTime*1000-(series.at(-1)?.t??0);const chartNote=instrument.id==='vix'&&vixSession(m,m.regularMarketTime*1000).marketSession==='EXTENDED'&&gap>3600000?'확장시간 분봉 미제공 · 최신 값은 위 시세에 표시':'';if(chartNote)series=[];
+ return validateQuote({...instrument,price,previousClose,change,changePct,changeBasis,chartNote,...(daily.referenceDate?{referenceDate:daily.referenceDate}:{}),
   asOf:new Date(m.regularMarketTime*1000).toISOString(),collectedAt:new Date(now).toISOString(),
   high:m.regularMarketDayHigh??null,low:m.regularMarketDayLow??null,
   marketState,sessionEnd:period?new Date(period.end*1000).toISOString():null,...(instrument.id==='vix'?vixSession(m,now):{}),
