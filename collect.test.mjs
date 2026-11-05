@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext,Script} from 'node:vm';
-import {parseExtended,vixSession,parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
+import {parseYahooWithHistory,parseExtended,vixSession,parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
 const now=Date.parse('2026-11-02T22:00:00Z');
 const fixture=(symbol,price=100,previous=110,time=now/1000-60)=>({chart:{result:[{meta:{symbol,regularMarketPrice:price,previousClose:previous,regularMarketTime:time,shortName:'Test',currentTradingPeriod:{regular:{start:now/1000-3600,end:now/1000+3600}}},timestamp:[now/1000-600,now/1000-300,now/1000-60],indicators:{quote:[{close:[110,null,price]}]}}]}});
 test('price changes use previous close and preserve original timestamps',()=>{const q=parseYahoo(fixture('^GSPC'),instruments.find(x=>x.id==='sp500'),now);assert.equal(q.change,-10);assert.equal(q.changePct,-10/110*100);assert.equal(q.asOf,'2026-11-02T21:59:00.000Z');assert.equal(q.series.length,2)});
@@ -144,4 +144,13 @@ test('VIX is marked as extended calculation only with a recent quote in its calc
  assert.equal(vixSession({...m,regularMarketTime:m.regularMarketTime-86400},now).marketState,'CLOSED');
  assert.equal(vixSession(m,Date.parse('2026-11-05T14:27:00Z')).marketState,'CLOSED');
  const after=Date.parse('2026-11-05T21:10:00Z');assert.equal(vixSession({...m,regularMarketTime:after/1000-60},after).marketSession,'REGULAR');
+});
+
+test('VIX extended quotes always verify the prior daily close even when stale reported changes agree',async t=>{
+ const now=Date.parse('2026-11-05T09:20:00Z'),j=fixture('^VIX',17.15,20.83,now/1000-60),m=j.chart.result[0].meta;
+ Object.assign(m,{instrumentType:'INDEX',exchangeTimezoneName:'America/New_York',priceHint:2,fulldayPrice:17.15,fulldayChange:-3.68,regularMarketChangePercent:-17.66683,currentTradingPeriod:{regular:{start:Date.parse('2026-11-05T14:30:00Z')/1000,end:Date.parse('2026-11-05T21:00:00Z')/1000}}});
+ j.chart.result[0].timestamp=[Date.parse('2026-11-04T20:55:00Z')/1000,Date.parse('2026-11-04T21:00:00Z')/1000];j.chart.result[0].indicators.quote[0].close=[16.78,17.15];
+ const daily={chart:{result:[{meta:{symbol:'^VIX',dataGranularity:'1d'},timestamp:['2026-11-03T14:30:00Z','2026-11-04T14:30:00Z','2026-11-05T09:17:00Z'].map(x=>Date.parse(x)/1000),indicators:{quote:[{close:[20.83,16.61000061,17.15]}]}}]}};
+ t.mock.method(globalThis,'fetch',async()=>Response.json(daily));const q=await parseYahooWithHistory(j,instruments.find(i=>i.id==='vix'),now);
+ assert.equal(q.previousClose,16.61);assert.equal(q.changePct.toFixed(2),'3.25');assert.equal(q.marketSession,'EXTENDED');assert.equal(q.series.length,0);assert.match(q.chartNote,/분봉 미제공/);
 });
