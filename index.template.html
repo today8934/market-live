@@ -60,7 +60,7 @@ function alignPeriodSeries(q,series){
 function chartSeries(q){const range=selectedRange(q);if(q.id==='night'){const end=q.series?.at(-1)?.t;return range==='1d'?q.series:(q.series??[]).filter(p=>p.t>=end-Number(range.slice(0,-1))*3600000)}return range==='1d'?q.series:alignPeriodSeries(q,historyCache.get(q.id+':'+range)?.series)}
 function chartMarkup(q){
  const range=selectedRange(q),entry=historyCache.get(q.id+':'+range),series=chartSeries(q),labels=q.id==='night'?nightLabels:rangeLabels;
- const chart=series?.length>=2?drawSeries({...q,series},range):`<div class="no-chart" role="status">${range==='1d'&&q.chartNote?safe(q.chartNote):entry?.error?'해당 기간의 차트를 불러오지 못했습니다.':entry?.loading?'선택한 기간의 차트를 불러오는 중…':q.id==='night'?'이 시간대의 차트 데이터가 부족합니다.':range==='1d'?'최근 거래일의 차트 데이터가 없습니다.':'선택한 기간의 차트를 준비하고 있습니다.'}${entry?.error?` <button class="chart-retry" data-chart-retry="${q.id}">다시 시도</button>`:''}</div>`;
+ const chart=series?.length>=2?drawSeries({...q,series},range,selectedChange(q,series).change):`<div class="no-chart" role="status">${range==='1d'&&q.chartNote?safe(q.chartNote):entry?.error?'해당 기간의 차트를 불러오지 못했습니다.':entry?.loading?'선택한 기간의 차트를 불러오는 중…':q.id==='night'?'이 시간대의 차트 데이터가 부족합니다.':range==='1d'?'최근 거래일의 차트 데이터가 없습니다.':'선택한 기간의 차트를 준비하고 있습니다.'}${entry?.error?` <button class="chart-retry" data-chart-retry="${q.id}">다시 시도</button>`:''}</div>`;
  const note=q.id==='night'?'제공 범위: 최근 야간장 · '+labels[range]:labels[range]+' · '+intervalLabels[range]+(range==='1d'?'':' · 끝값은 최신 시세');
  const state=entry?.loading?' · 조회 중':entry?.error?' · 연결 실패, 이 기간의 이전 차트 유지':entry?.collectedAt?' · 조회 '+time(entry.collectedAt)+' KST':'';
  return chart+`<p class="chart-caption${entry?.error?' chart-warning':''}">${safe(note+(series?.length>=2||entry?.loading?state:''))}</p>`;
@@ -101,14 +101,14 @@ function periodChange(q,range,series,label,entry={}){
  const change=q.price-first.v;
  return {change,changePct:change/first.v*100,basis:first.v,basisAt:first.t,label:basisLabel,message:'',warning:!!entry.error};
 }
-function selectedChange(q){const range=selectedRange(q);return periodChange(q,range,chartSeries(q),(q.id==='night'?nightLabels:rangeLabels)[range],historyCache.get(q.id+':'+range))}
+function selectedChange(q,series=chartSeries(q)){const range=selectedRange(q);return periodChange(q,range,series,(q.id==='night'?nightLabels:rangeLabels)[range],historyCache.get(q.id+':'+range))}
 function changeText(q){if(!Number.isFinite(q.change))return '등락 확인 불가';const s=sign(q.change),v=Math.abs(q.change);if(q.id==='us10y')return `${s}${fmt(v,3)}%p (${s}${fmt(v*100,1)}bp)`;return `${q.change>0?'▲':q.change<0?'▼':'―'} ${fmt(v)} (${sign(q.changePct)}${fmt(Math.abs(q.changePct))}%)`;}
 function basisTime(t){return Number.isFinite(t)?new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(t))+' KST':null}
 function changeMarkup(q,p=selectedChange(q)){const description=p.basisAt?basisTime(p.basisAt)+' · '+fmt(p.basis,q.id==='us10y'?3:2)+' → '+fmt(q.price,q.id==='us10y'?3:2):p.label;return `<span>${safe(p.message||changeText({...q,...p}))}</span><small title="${safe(description)}">${safe(p.label)}</small>${p.warning?'<small class="change-warning">기간 조회 실패 · 이전 조회 기준</small>':''}`}
 function detailFacts(q){const p=selectedChange(q),unit=q.unit==='%'?'%':q.unit==='USD/bbl'?' USD':' pt',entries=[['등락 비교 기준',p.label],['비교 기준값',fmt(p.basis,q.id==='us10y'?3:2)+unit],['비교 기준 시점',basisTime(p.basisAt)||(selectedRange(q)==='1d'?(q.id==='night'?'주간장 종가':'직전 거래일 종가'):'확인 불가')],['제공처 시세 기준',time(q.asOf)+' KST'],['개별 수집 완료',time(q.collectedAt)+' KST'],['최근 거래일 고가',fmt(q.high,q.id==='us10y'?3:2)],['최근 거래일 저가',fmt(q.low,q.id==='us10y'?3:2)],['상품 / 계약',q.contract||q.symbol],['데이터 출처',q.source||'확인 불가']];$('#modal-data').innerHTML=entries.map(([k,v])=>`<dt>${safe(k)}</dt><dd>${safe(v)}</dd>`).join('')}
 function updateChangeViews(q){const p=selectedChange(q);document.querySelectorAll(`[data-change-view="${q.id}"]`).forEach(el=>{el.className='change '+direction(p.change);el.innerHTML=changeMarkup(q,p)});if(activeDetailId===q.id&&$('#detail').open){$('#modal-change').className='change '+direction(p.change);$('#modal-change').innerHTML=changeMarkup(q,p);detailFacts(q)}}
 function chartTime(t){const d=new Date(t),options={timeZone:'Asia/Seoul'};return {clock:new Intl.DateTimeFormat('en-GB',{...options,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(d),date:new Intl.DateTimeFormat('en-GB',{...options,month:'2-digit',day:'2-digit'}).formatToParts(d).filter(p=>p.type==='month'||p.type==='day').sort((a,b)=>a.type==='month'?-1:b.type==='month'?1:0).map(p=>p.value).join('.')};}
-function drawSeries(q,range='1d'){
+function drawSeries(q,range,change){
  const points=(q.series??[]).filter(x=>Number.isFinite(x.v)&&Number.isFinite(x.t)).sort((a,b)=>a.t-b.t);
  if(points.length<2)return '<div class="no-chart">선택한 기간의 차트 데이터가 부족합니다.</div>';
  let low=Math.min(...points.map(x=>x.v)),high=Math.max(...points.map(x=>x.v));
@@ -117,12 +117,12 @@ function drawSeries(q,range='1d'){
  const t0=points[0].t,t1=points.at(-1).t;
  const xy=points.map(p=>[(p.t-t0)/(t1-t0||1)*300,100-(p.v-low)/(high-low)*100]);
  const path=xy.map((p,i)=>(i?'L':'M')+p.map(n=>n.toFixed(2)).join(' ')).join(' ');
- const delta=points.at(-1).v-points[0].v;const color=delta>0?'#ff9295':delta<0?'#8fbaff':'#9caea5';
+
  const axisTitle=q.unit==='%'?'금리 (%)':q.unit==='USD/bbl'?'가격 (달러/배럴)':q.unit==='USD'?'가격 (달러)':'지수 (pt)';
  const yTicks=[high,(high+low)/2,low].map((v,i)=>'<span style="top:'+i*50+'%">'+fmt(v,precision)+'</span>').join('');
  const intraday=range==='1d'||range.endsWith('h');
  const xTicks=[t0,(t0+t1)/2,t1].map(t=>{const p=chartTime(t),year=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',year:'numeric'}).format(new Date(t));return '<span>'+(intraday?p.clock:p.date)+'<small>'+(intraday?p.date:year)+'</small></span>'}).join('');
- return '<div class="spark" role="img" aria-label="'+safe(q.name)+' 가격 추이, '+safe(time(new Date(t0).toISOString()))+'부터 '+safe(time(new Date(t1).toISOString()))+' KST, '+fmt(low,precision)+'부터 '+fmt(high,precision)+' '+safe(q.unit)+'"><div class="chart-meta"><span>'+axisTitle+'</span><span>'+(intraday?'시간 (KST)':'날짜 (KST)')+'</span></div><div class="chart-y" aria-hidden="true">'+yTicks+'</div><svg class="chart-plot" viewBox="0 0 300 100" preserveAspectRatio="none" aria-hidden="true"><line class="chart-grid" x1="0" y1="0" x2="300" y2="0"/><line class="chart-grid" x1="0" y1="50" x2="300" y2="50"/><line class="chart-grid" x1="0" y1="100" x2="300" y2="100"/><path d="'+path+' L300 100 L0 100 Z" fill="'+color+'" opacity=".065"/><path d="'+path+'" fill="none" stroke="'+color+'" stroke-width="1.7"/></svg><div class="chart-x" aria-hidden="true">'+xTicks+'</div></div>';
+ return '<div class="spark" role="img" aria-label="'+safe(q.name)+' 가격 추이, '+safe(time(new Date(t0).toISOString()))+'부터 '+safe(time(new Date(t1).toISOString()))+' KST, '+fmt(low,precision)+'부터 '+fmt(high,precision)+' '+safe(q.unit)+'"><div class="chart-meta"><span>'+axisTitle+'</span><span>'+(intraday?'시간 (KST)':'날짜 (KST)')+'</span></div><div class="chart-y" aria-hidden="true">'+yTicks+'</div><svg class="chart-plot '+direction(change)+'" viewBox="0 0 300 100" preserveAspectRatio="none" aria-hidden="true"><line class="chart-grid" x1="0" y1="0" x2="300" y2="0"/><line class="chart-grid" x1="0" y1="50" x2="300" y2="50"/><line class="chart-grid" x1="0" y1="100" x2="300" y2="100"/><path d="'+path+' L300 100 L0 100 Z" fill="currentColor" opacity=".065"/><path d="'+path+'" fill="none" stroke="currentColor" stroke-width="1.7"/></svg><div class="chart-x" aria-hidden="true">'+xTicks+'</div></div>';
 }
 function collectionStale(q,now=Date.now()){const t=Date.parse(q.collectedAt);return !Number.isFinite(t)||now-t>3*60000;}
 function quoteStatus(q,now=Date.now()){
@@ -150,7 +150,7 @@ function extendedLabel(x,now=Date.now()){
 function extendedPanel(q){
  const symbol=referenceSymbols[q.id];if(!symbol)return '';
  const x=q.extended,valid=Number.isFinite(x?.price),url='https://finance.yahoo.com/quote/'+symbol+'/';
- return `<section class="extended-panel" aria-label="${safe(q.name)} 시간외 참고 ETF"><div class="extended-heading"><strong>시간외 참고 · ${symbol} ETF</strong><span data-extended-status="${q.id}">${safe(extendedLabel(x))}</span></div>${valid?`<div class="extended-value">${fmt(x.price)} <small>USD</small><span class="${direction(x.change)}">${changeText({...x,id:symbol})}</span></div><p>ETF 정규장 종가 ${fmt(x.regularClose)} USD 대비</p>${x.series?.length>=2?drawSeries({id:symbol,name:symbol+' 시간외',unit:'USD',series:x.series},'1d'):''}<p>시세 ${time(x.asOf)} KST · ${x.session==='PRE'?'프리':'애프터'} 세션<br>기준 종가 ${time(x.referenceTime)} KST</p>`:'<p>제공처에서 확인 가능한 프리·애프터 시세를 기다리고 있습니다.</p>'}<p>ETF 가격·등락률이며 지수 값과 다릅니다. <a href="${url}" target="_blank" rel="noopener noreferrer">원본 ↗</a></p></section>`;
+ return `<section class="extended-panel" aria-label="${safe(q.name)} 시간외 참고 ETF"><div class="extended-heading"><strong>시간외 참고 · ${symbol} ETF</strong><span data-extended-status="${q.id}">${safe(extendedLabel(x))}</span></div>${valid?`<div class="extended-value">${fmt(x.price)} <small>USD</small><span class="${direction(x.change)}">${changeText({...x,id:symbol})}</span></div><p>ETF 정규장 종가 ${fmt(x.regularClose)} USD 대비</p>${x.series?.length>=2?drawSeries({id:symbol,name:symbol+' 시간외',unit:'USD',series:x.series},'1d',x.change):''}<p>시세 ${time(x.asOf)} KST · ${x.session==='PRE'?'프리':'애프터'} 세션<br>기준 종가 ${time(x.referenceTime)} KST</p>`:'<p>제공처에서 확인 가능한 프리·애프터 시세를 기다리고 있습니다.</p>'}<p>ETF 가격·등락률이며 지수 값과 다릅니다. <a href="${url}" target="_blank" rel="noopener noreferrer">원본 ↗</a></p></section>`;
 }
 function updateExtendedStatuses(){document.querySelectorAll('[data-extended-status]').forEach(el=>{const q=data.quotes.find(q=>q.id===el.dataset.extendedStatus);el.textContent=extendedLabel(q?.extended)})}
 

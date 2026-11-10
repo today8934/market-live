@@ -69,6 +69,31 @@ test('one-day view preserves the corrected prior-close return instead of intrada
  const p=periodChange(periodQuote,'1d',points(730),'1일');
  assert.equal(p.basis,704.39);assert.equal(p.change,10.56);assert.equal(p.changePct.toFixed(2),'1.50');assert.match(p.label,/전일 대비/);
 });
+test('chart line and fill follow the displayed change for each period and ETF session',()=>{
+ const setup=browserSource.slice(0,browserSource.indexOf("$('#cards').addEventListener"));
+ const ui=runInNewContext(setup+';({card,chartPanel,extendedPanel,chartPrefs,historyCache})',{
+  document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}
+ });
+ const kospi={...periodQuote,id:'kospi',name:'KOSPI',price:5239.13,previousClose:5018.85,change:220.28,changePct:4.39,series:points(5266.16,5239.13)};
+ function assertChart(html,direction){
+  assert.ok(html.includes('class="chart-plot '+direction+'"'));
+  assert.match(html,/fill="currentColor"/);
+  assert.match(html,/stroke="currentColor"/);
+ }
+ function assertQuote(q,direction){
+  assert.ok(ui.card(q).includes('class="change '+direction+'"'));
+  assertChart(ui.card(q),direction);
+  assertChart(ui.chartPanel(q,'modal'),direction);
+ }
+ assertQuote(kospi,'up');
+ assertQuote({...kospi,price:4998.85,change:-20,series:points(4900,4998.85)},'down');
+ assertQuote({...kospi,price:5018.85,change:0,series:points(5000,5018.85)},'flat');
+ ui.chartPrefs.instruments.kospi='5d';
+ ui.historyCache.set('kospi:5d',{series:points(5300,5200)});
+ assertQuote(kospi,'down');
+ const regularDecline={...kospi,id:'sp500',change:-5,extended:{regularClose:100,price:102,change:2,changePct:2,series:points(105,102)}};
+ assertChart(ui.extendedPanel(regularDecline),'up');
+});
 test('every longer range uses its own first chart value and the displayed current quote',()=>{
  for(const [range,base] of [['5d',730],['1mo',680],['3mo',650],['6mo',600],['1y',550],['5y',500]]){
   const p=periodChange(periodQuote,range,points(base),range);
