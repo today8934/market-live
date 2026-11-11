@@ -6,6 +6,7 @@ export const instruments = [
  {id:'kospi',name:'코스피',symbol:'^KS11',group:'kr',unit:'pt',sourceUrl:'https://finance.naver.com/sise/sise_index.naver?code=KOSPI'},
  {id:'kosdaq',name:'코스닥',symbol:'^KQ11',group:'kr',unit:'pt',sourceUrl:'https://finance.naver.com/sise/sise_index.naver?code=KOSDAQ'},
  {id:'night',name:'코스피200 야간선물',symbol:'KOSPI200NF',group:'kr',unit:'pt',sourceUrl:'https://kred.dev/en/kospi-200-night-futures'},
+ {id:'skhy',name:'SK하이닉스 ADR',symbol:'SKHY',group:'us',unit:'USD',sourceUrl:'https://www.nasdaq.com/market-activity/stocks/skhy'},
  {id:'nasdaq',name:'나스닥 종합',symbol:'^IXIC',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EIXIC/'},
  {id:'sp500',name:'S&P 500',symbol:'^GSPC',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EGSPC/'},
  {id:'sox',name:'필라델피아 반도체 지수',symbol:'^SOX',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5ESOX/'},
@@ -52,7 +53,7 @@ export function yahooDayChange(m) {
 
 export function verifiedPriorClose(quoteJson, historyJson, instrument) {
  const m=quoteJson.chart?.result?.[0]?.meta,r=historyJson.chart?.result?.[0];
- if(m?.symbol!==instrument.symbol||m.instrumentType!=='INDEX'||r?.meta?.symbol!==instrument.symbol||r.meta.dataGranularity!=='1d'||!m.exchangeTimezoneName)throw Error('Cannot verify daily reference');
+ if(m?.symbol!==instrument.symbol||m.instrumentType!==(instrument.id==='skhy'?'EQUITY':'INDEX')||r?.meta?.symbol!==instrument.symbol||r.meta.dataGranularity!=='1d'||!m.exchangeTimezoneName)throw Error('Cannot verify daily reference');
  const day=t=>new Intl.DateTimeFormat('en-CA',{timeZone:m.exchangeTimezoneName,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t*1000));
  const quoteDay=day(m.regularMarketTime);
  const rows=(r.timestamp??[]).map((t,i)=>({t,day:day(t),close:r.indicators?.quote?.[0]?.close?.[i]})).filter(b=>finite(b.t)&&finite(b.close)&&b.close>0).sort((a,b)=>a.t-b.t);
@@ -125,13 +126,13 @@ export function parseNight(html,now=Date.now()) {
   source:'KRED',contract:s.futures_code,delayNote:'외부 참고 시세 · 주간 종가 대비',
   sessionDate:s.session_date,series:sample(bars.map(b=>({t:b.time*1000,v:b.close}))),unavailable:false,collectionError:false},now);
 }
-export const extendedReferences={nasdaq:{symbol:'ONEQ',name:'나스닥 종합 추종 ETF'},sp500:{symbol:'SPY',name:'S&P 500 추종 ETF'},sox:{symbol:'SOXQ',name:'반도체 지수 추종 ETF'}};
-export function parseExtended(j,reference,now=Date.now(),dailyJson){
+export const extendedReferences={skhy:{symbol:'SKHY',name:'SK하이닉스 ADR',instrumentType:'EQUITY'},nasdaq:{symbol:'ONEQ',name:'나스닥 종합 추종 ETF'},sp500:{symbol:'SPY',name:'S&P 500 추종 ETF'},sox:{symbol:'SOXQ',name:'반도체 지수 추종 ETF'}};
+export function parseExtended(j,reference,now=Date.now(),dailyJson,session){
  const r=j.chart?.result?.[0],m=r?.meta;
- if(m?.symbol!==reference.symbol||m.instrumentType!=='ETF'||!m.hasPrePostMarketData)throw Error('Unsupported extended quote');
+ if(m?.symbol!==reference.symbol||m.instrumentType!==(reference.instrumentType??'ETF')||!m.hasPrePostMarketData)throw Error('Unsupported extended quote');
  const periods=kind=>[...(m.tradingPeriods?.[kind]??[]).flat(),m.currentTradingPeriod?.[kind]].filter(p=>p&&finite(p.start)&&finite(p.end)&&p.end>p.start);
  const pre=periods('pre'),post=periods('post'),regular=periods('regular');
- const windows=[...pre.map(p=>({...p,session:'PRE'})),...post.map(p=>({...p,session:'POST'}))];
+ const windows=[...pre.map(p=>({...p,session:'PRE'})),...post.map(p=>({...p,session:'POST'}))].filter(w=>!session||w.session===session);
  const rows=(r.timestamp??[]).map((t,i)=>({t,v:r.indicators?.quote?.[0]?.close?.[i]})).filter(p=>finite(p.t)&&p.t*1000<=now+60000&&finite(p.v)&&p.v>0).sort((a,b)=>a.t-b.t);
  const last=rows.filter(p=>windows.some(w=>p.t>=w.start&&p.t<w.end)).at(-1);
  if(!last||now-last.t*1000>7*86400000)throw Error('No recent extended quote');
@@ -160,18 +161,36 @@ export function vixSession(m,now=Date.now()){
 export async function attachExtended(quotes,previous={quotes:[]}){
  await Promise.all(Object.entries(extendedReferences).map(async([id,reference])=>{
   const q=quotes.find(q=>q.id===id);if(!q)return;
+  const sessions=id==='skhy'?['PRE','POST']:['latest'];
+  const values={};
   for(const host of ['query1','query2']){
    try{
-    const raw=await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol+'?range=5d&interval=5m&includePrePost=true',true,4000);
-    try{q.extended=parseExtended(raw,reference)}catch(error){
-     if(error.code!=='EXTENDED_REFERENCE_REQUIRED')throw error;
-     const daily=await request('https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol+'?range=5d&interval=1d',true,4000);
-     q.extended=parseExtended(raw,reference,Date.now(),daily);
-    }return;
+    const base='https://'+host+'.finance.yahoo.com/v8/finance/chart/'+reference.symbol;
+    const raw=await request(base+'?range=5d&interval=5m&includePrePost=true',true,4000);
+    let daily;
+    for(const session of sessions){
+     if(values[session])continue;
+     const kind=session==='latest'?undefined:session;
+     try{values[session]=parseExtended(raw,reference,Date.now(),undefined,kind)}
+     catch(error){
+      if(error.code!=='EXTENDED_REFERENCE_REQUIRED')continue;
+      try{
+       daily??=await request(base+'?range=5d&interval=1d',true,4000);
+       values[session]=parseExtended(raw,reference,Date.now(),daily,kind);
+      }catch{}
+     }
+    }
+    if(sessions.every(session=>values[session]))break;
    }catch{}
   }
-  const old=previous.quotes?.find(q=>q.id===id)?.extended;
-  q.extended=old?{...old,collectionError:true}:{...reference,price:null,collectionError:true};
+  const previousQuote=previous.quotes?.find(item=>item.id===id);
+  for(const session of sessions){
+   if(values[session])continue;
+   const old=session==='latest'?previousQuote?.extended:previousQuote?.extendedSessions?.[session];
+   values[session]={...(old??reference),collectionError:true};
+  }
+  if(id==='skhy')q.extendedSessions=values;
+  else q.extended=values.latest;
  }));return quotes;
 }
 
@@ -196,13 +215,13 @@ export async function collect() {
    if(instrument.id==='night')q=parseNight(await request(instrument.sourceUrl,false));
    else{
     let j;
-    for(const host of ['query1','query2']){try{j=await request(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(instrument.symbol)}?interval=5m&range=1d&includePrePost=true`);break}catch{}}
+    for(const host of ['query1','query2']){try{j=await request(`https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(instrument.symbol)}?interval=5m&range=1d&includePrePost=${instrument.id!=='skhy'}`);break}catch{}}
     if(!j)throw new Error('Both price endpoints failed');q=await parseYahooWithHistory(j,instrument);
    }
    console.log(`${q.id}: ${q.price} / ${q.asOf}`);return q;
   }catch(e){console.warn(`${instrument.id}: ${e.message}`);return failedQuote(instrument,previous.quotes?.find(q=>q.id===instrument.id));}
  }));
- const references=await referenceTask;for(const q of quotes){const ref=references.find(r=>r.id===q.id);if(ref)q.extended=ref.extended}
+ const references=await referenceTask;for(const q of quotes){const ref=references.find(r=>r.id===q.id);if(ref)Object.assign(q,ref)}
  const output={schemaVersion:1,generatedAt:new Date().toISOString(),targetIntervalMinutes:5,quotes};
  await writeFile(root+'/quotes.json',JSON.stringify(output));
  let template=await readFile(new URL('./index.template.html',import.meta.url),'utf8');

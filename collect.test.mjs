@@ -182,3 +182,31 @@ test('VIX extended quotes always verify the prior daily close even when stale re
  t.mock.method(globalThis,'fetch',async()=>Response.json(daily));const q=await parseYahooWithHistory(j,instruments.find(i=>i.id==='vix'),now);
  assert.equal(q.previousClose,16.61);assert.equal(q.changePct.toFixed(2),'3.25');assert.equal(q.marketSession,'EXTENDED');assert.equal(q.series.length,0);assert.match(q.chartNote,/분봉 미제공/);
 });
+test('SKHY premarket and after-hours use their own trades and separate regular closes',()=>{
+ const sec=s=>Date.parse(s)/1000;
+ const period=(s,e)=>({start:sec(s),end:sec(e)});
+ const previous=period('2026-11-09T14:30Z','2026-11-09T21:00Z');
+ const regular=period('2026-11-10T14:30Z','2026-11-10T21:00Z');
+ const pre=period('2026-11-10T09:00Z','2026-11-10T14:30Z');
+ const post=period('2026-11-10T21:00Z','2026-11-11T01:00Z');
+ const clock=Date.parse('2026-11-10T22:00Z'),reference={symbol:'SKHY',instrumentType:'EQUITY'};
+ const source={chart:{result:[{meta:{symbol:'SKHY',instrumentType:'EQUITY',hasPrePostMarketData:true,regularMarketPrice:129.66,regularMarketTime:regular.end,tradingPeriods:{pre:[[pre]],post:[[post]],regular:[[previous],[regular]]}},timestamp:[pre.start,pre.end-300,regular.start,post.start,post.start+300],indicators:{quote:[{close:[132,131,130,133,134]}]}}]}};
+ const daily={chart:{result:[{meta:{symbol:'SKHY',dataGranularity:'1d'},timestamp:[previous.start,regular.start],indicators:{quote:[{close:[134.38,129.66]}]}}]}};
+ const before=parseExtended(source,reference,clock,daily,'PRE'),after=parseExtended(source,reference,clock,daily,'POST');
+ assert.deepEqual([before.session,before.price,before.regularClose,before.series.length],['PRE',131,134.38,2]);
+ assert.deepEqual([after.session,after.price,after.regularClose,after.series.length],['POST',134,129.66,2]);
+ assert.ok(before.change<0&&after.change>0);
+ assert.throws(()=>parseExtended(source,reference,pre.start*1000-60000,daily,'POST'),/No recent/);
+});
+test('SKHY renders dollar prices, two independent sessions and both detailed session charts',()=>{
+ const setup=browserSource.slice(0,browserSource.indexOf("$('#cards').addEventListener"));
+ const ui=runInNewContext(setup+';({card,extendedPanel,validPayload})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
+ const regular={...periodQuote,...instruments.find(q=>q.id==='skhy'),price:100,series:points(101,100)};
+ const session={asOf:regular.asOf,regularClose:99,referenceTime:regular.asOf,collectedAt:regular.asOf,sessionEnd:regular.asOf,series:points(100,101)};
+ const q={...regular,extendedSessions:{PRE:{...session,session:'PRE',price:101,change:2,changePct:2.02},POST:{...session,session:'POST',price:98,change:-1,changePct:-1.01}}};
+ const card=ui.card(q),details=ui.extendedPanel(q,true);
+ assert.match(card,/<span class="unit">USD<\/span>/);assert.match(card,/프리마켓/);assert.match(card,/애프터마켓/);
+ assert.match(details,/가격 \(달러\)/);assert.equal((details.match(/class="chart-plot /g)||[]).length,2);assert.doesNotMatch(details,/ETF/);
+ assert.match(ui.extendedPanel({...q,extendedSessions:{PRE:q.extendedSessions.PRE}}),/시세 없음/);
+ assert.ok(ui.validPayload({schemaVersion:1,generatedAt:regular.asOf,quotes:instruments.map(i=>({...i,price:100,change:1,changePct:1}))}));
+});
