@@ -161,7 +161,7 @@ export function vixSession(m,now=Date.now()){
 export async function attachExtended(quotes,previous={quotes:[]}){
  await Promise.all(Object.entries(extendedReferences).map(async([id,reference])=>{
   const q=quotes.find(q=>q.id===id);if(!q)return;
-  const sessions=id==='skhy'?['PRE','POST']:['latest'];
+  const sessions=['PRE','POST'];
   const values={};
   for(const host of ['query1','query2']){
    try{
@@ -170,13 +170,12 @@ export async function attachExtended(quotes,previous={quotes:[]}){
     let daily;
     for(const session of sessions){
      if(values[session])continue;
-     const kind=session==='latest'?undefined:session;
-     try{values[session]=parseExtended(raw,reference,Date.now(),undefined,kind)}
+     try{values[session]=parseExtended(raw,reference,Date.now(),undefined,session)}
      catch(error){
       if(error.code!=='EXTENDED_REFERENCE_REQUIRED')continue;
       try{
        daily??=await request(base+'?range=5d&interval=1d',true,4000);
-       values[session]=parseExtended(raw,reference,Date.now(),daily,kind);
+       values[session]=parseExtended(raw,reference,Date.now(),daily,session);
       }catch{}
      }
     }
@@ -186,11 +185,16 @@ export async function attachExtended(quotes,previous={quotes:[]}){
   const previousQuote=previous.quotes?.find(item=>item.id===id);
   for(const session of sessions){
    if(values[session])continue;
-   const old=session==='latest'?previousQuote?.extended:previousQuote?.extendedSessions?.[session];
+   const legacy=previousQuote?.extended;
+   const old=previousQuote?.extendedSessions?.[session]??(legacy?.session===session?legacy:null);
    values[session]={...(old??reference),collectionError:true};
   }
-  if(id==='skhy')q.extendedSessions=values;
-  else q.extended=values.latest;
+  q.extendedSessions=values;
+  // Already-open dashboards read the latest ETF session from this older field.
+  if(id!=='skhy'){
+   const observed=Object.values(values).filter(x=>finite(x.price)&&x.asOf);
+   q.extended=observed.sort((a,b)=>Date.parse(b.asOf)-Date.parse(a.asOf))[0]??{...reference,price:null,collectionError:true};
+  }
  }));return quotes;
 }
 

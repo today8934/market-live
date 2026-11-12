@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext,Script} from 'node:vm';
-import {parseYahooWithHistory,parseExtended,vixSession,parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
+import {attachExtended,parseYahooWithHistory,parseExtended,vixSession,parseYahoo,verifiedPriorClose,parseNight,failedQuote,instruments} from './collect.mjs';
 const now=Date.parse('2026-11-02T22:00:00Z');
 const fixture=(symbol,price=100,previous=110,time=now/1000-60)=>({chart:{result:[{meta:{symbol,regularMarketPrice:price,previousClose:previous,regularMarketTime:time,shortName:'Test',currentTradingPeriod:{regular:{start:now/1000-3600,end:now/1000+3600}}},timestamp:[now/1000-600,now/1000-300,now/1000-60],indicators:{quote:[{close:[110,null,price]}]}}]}});
 test('price changes use previous close and preserve original timestamps',()=>{const q=parseYahoo(fixture('^GSPC'),instruments.find(x=>x.id==='sp500'),now);assert.equal(q.change,-10);assert.equal(q.changePct,-10/110*100);assert.equal(q.asOf,'2026-11-02T21:59:00.000Z');assert.equal(q.series.length,2)});
@@ -92,7 +92,7 @@ test('chart line and fill follow the displayed change for each period and ETF se
  ui.historyCache.set('kospi:5d',{series:points(5300,5200)});
  assertQuote(kospi,'down');
  const regularDecline={...kospi,id:'sp500',change:-5,extended:{regularClose:100,price:102,change:2,changePct:2,series:points(105,102)}};
- assertChart(ui.extendedPanel(regularDecline),'up');
+ assertChart(ui.extendedPanel({...regularDecline,extended:{...regularDecline.extended,session:'POST'}},true),'up');
 });
 test('every longer range uses its own first chart value and the displayed current quote',()=>{
  for(const [range,base] of [['5d',730],['1mo',680],['3mo',650],['6mo',600],['1y',550],['5y',500]]){
@@ -209,4 +209,31 @@ test('SKHY renders dollar prices, two independent sessions and both detailed ses
  assert.match(details,/가격 \(달러\)/);assert.equal((details.match(/class="chart-plot /g)||[]).length,2);assert.doesNotMatch(details,/ETF/);
  assert.match(ui.extendedPanel({...q,extendedSessions:{PRE:q.extendedSessions.PRE}}),/시세 없음/);
  assert.ok(ui.validPayload({schemaVersion:1,generatedAt:regular.asOf,quotes:instruments.map(i=>({...i,price:100,change:1,changePct:1}))}));
+});
+
+test('failed ETF refresh preserves independent sessions and migrates a previous single-session quote',async t=>{
+ t.mock.method(globalThis,'fetch',async()=>{throw Error('offline')});
+ const pre={symbol:'SPY',session:'PRE',price:101,asOf:'2026-11-10T12:00:00Z'};
+ const post={symbol:'SPY',session:'POST',price:98,asOf:'2026-11-10T22:00:00Z'};
+ const [q]=await attachExtended([{id:'sp500'}],{quotes:[{id:'sp500',extendedSessions:{PRE:pre},extended:post}]});
+ assert.equal(q.extendedSessions.PRE.price,101);assert.equal(q.extendedSessions.POST.price,98);
+ assert.equal(q.extendedSessions.PRE.collectionError,true);assert.equal(q.extended.asOf,post.asOf);
+ const [old]=await attachExtended([{id:'sp500'}],{quotes:[{id:'sp500',extended:post}]});
+ assert.equal(old.extendedSessions.PRE.price,undefined);assert.equal(old.extendedSessions.POST.asOf,post.asOf);
+});
+test('each card labels both sessions and ETF charts use the reference symbol and dollars',()=>{
+ const setup=browserSource.slice(0,browserSource.indexOf("$('#cards').addEventListener"));
+ const ui=runInNewContext(setup+';({extendedPanel,widgetCard})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
+ const session={price:101,regularClose:99,asOf:periodQuote.asOf,referenceTime:periodQuote.asOf,collectedAt:periodQuote.asOf,sessionEnd:periodQuote.asOf,series:points(100,101),change:2,changePct:2.02};
+ for(const q of instruments){
+  const html=ui.extendedPanel({...q,extendedSessions:{PRE:session,POST:{...session,price:95,change:-4}}},true);
+  assert.match(html,/프리마켓/);assert.match(html,/애프터마켓/);
+  const symbol={sp500:'SPY',nasdaq:'ONEQ',sox:'SOXQ'}[q.id];
+  if(symbol){
+   assert.ok(html.includes(symbol+' ETF 프리마켓 가격 추이'));
+   assert.ok(html.includes(symbol+' ETF 애프터마켓 가격 추이'));
+   assert.match(html,/가격 \(달러\)/);assert.match(html,/class="chart-plot up"/);assert.match(html,/class="chart-plot down"/);
+  }else if(q.id!=='skhy')assert.match(html,/별도 (구분 없음|시세 미제공)/);
+ }
+ assert.match(ui.widgetCard(),/프리마켓.*애프터마켓/);
 });
