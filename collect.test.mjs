@@ -246,7 +246,7 @@ test('daily credit cards use date axes, appropriate units and selected-period ch
  const ui=runInNewContext(setup+';({card,selectedChange,chartSeries,selectedRange,chartPrefs,quoteStatus,extendedPanel,dateOnly})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
  const rows=[];for(let d=new Date('2021-11-01T00:00Z'),i=0;d<=new Date('2026-11-13T00:00Z');d.setUTCDate(d.getUTCDate()+1),i++)if(d.getUTCDay()>0&&d.getUTCDay()<6)rows.push({TMPV1:d.toISOString().slice(0,10).replaceAll('-',''),TMPV2:20000000+i*1000,TMPV3:15000000+i*700,TMPV4:5000000+i*300});
  const q=parseCredit({ds1:rows},Date.now())[0];
- assert.equal(ui.selectedRange(q),'1mo');assert.equal(ui.quoteStatus(q)[0],'일별 통계');assert.equal(ui.extendedPanel(q),'');
+ assert.equal(ui.selectedRange(q),'1y');assert.equal(ui.quoteStatus(q)[0],'일별 통계');assert.equal(ui.extendedPanel(q),'');
  assert.equal(ui.quoteStatus({...q,collectedAt:new Date(Date.now()-61*60000).toISOString()})[0],'일별 통계');
  assert.equal(ui.quoteStatus({...q,collectedAt:new Date(Date.now()-121*60000).toISOString()})[0],'갱신 지연');
  let priorLength=0;
