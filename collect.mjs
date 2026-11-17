@@ -1,3 +1,4 @@
+import {creditInstruments,loadCreditQuotes} from './credit-source.mjs';
 import {readFile, writeFile, mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
@@ -6,6 +7,7 @@ export const instruments = [
  {id:'kospi',name:'코스피',symbol:'^KS11',group:'kr',unit:'pt',sourceUrl:'https://finance.naver.com/sise/sise_index.naver?code=KOSPI'},
  {id:'kosdaq',name:'코스닥',symbol:'^KQ11',group:'kr',unit:'pt',sourceUrl:'https://finance.naver.com/sise/sise_index.naver?code=KOSDAQ'},
  {id:'night',name:'코스피200 야간선물',symbol:'KOSPI200NF',group:'kr',unit:'pt',sourceUrl:'https://kred.dev/en/kospi-200-night-futures'},
+ ...creditInstruments,
  {id:'skhy',name:'SK하이닉스 ADR',symbol:'SKHY',group:'us',unit:'USD',sourceUrl:'https://www.nasdaq.com/market-activity/stocks/skhy'},
  {id:'nasdaq',name:'나스닥 종합',symbol:'^IXIC',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EIXIC/'},
  {id:'sp500',name:'S&P 500',symbol:'^GSPC',group:'us',unit:'pt',sourceUrl:'https://finance.yahoo.com/quote/%5EGSPC/'},
@@ -216,6 +218,7 @@ export async function collect() {
  const quotes=await Promise.all(instruments.map(async instrument=>{
   try{
    let q;
+   if(instrument.kind==='daily-statistic')return (await loadCreditQuotes(previous.quotes)).find(q=>q.id===instrument.id);
    if(instrument.id==='night')q=parseNight(await request(instrument.sourceUrl,false));
    else{
     let j;

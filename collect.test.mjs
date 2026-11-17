@@ -1,3 +1,5 @@
+import './credit-source.test.mjs';
+import {parseCredit} from './credit-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -225,7 +227,7 @@ test('each card labels both sessions and ETF charts use the reference symbol and
  const setup=browserSource.slice(0,browserSource.indexOf("$('#cards').addEventListener"));
  const ui=runInNewContext(setup+';({extendedPanel,widgetCard})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
  const session={price:101,regularClose:99,asOf:periodQuote.asOf,referenceTime:periodQuote.asOf,collectedAt:periodQuote.asOf,sessionEnd:periodQuote.asOf,series:points(100,101),change:2,changePct:2.02};
- for(const q of instruments){
+ for(const q of instruments.filter(q=>q.kind!=='daily-statistic')){
   const html=ui.extendedPanel({...q,extendedSessions:{PRE:session,POST:{...session,price:95,change:-4}}},true);
   assert.match(html,/프리마켓/);assert.match(html,/애프터마켓/);
   const symbol={sp500:'SPY',nasdaq:'ONEQ',sox:'SOXQ'}[q.id];
@@ -236,4 +238,23 @@ test('each card labels both sessions and ETF charts use the reference symbol and
   }else if(q.id!=='skhy')assert.match(html,/별도 (구분 없음|시세 미제공)/);
  }
  assert.match(ui.widgetCard(),/프리마켓.*애프터마켓/);
+});
+
+
+test('daily credit cards use date axes, appropriate units and selected-period changes without market sessions',()=>{
+ const setup=browserSource.slice(0,browserSource.indexOf("$('#cards').addEventListener"));
+ const ui=runInNewContext(setup+';({card,selectedChange,chartSeries,selectedRange,chartPrefs,quoteStatus,extendedPanel})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
+ const rows=[];for(let d=new Date('2021-11-01T00:00Z'),i=0;d<=new Date('2026-11-13T00:00Z');d.setUTCDate(d.getUTCDate()+1),i++)if(d.getUTCDay()>0&&d.getUTCDay()<6)rows.push({TMPV1:d.toISOString().slice(0,10).replaceAll('-',''),TMPV2:20000000+i*1000,TMPV3:15000000+i*700,TMPV4:5000000+i*300});
+ const q=parseCredit({ds1:rows},Date.now())[0];
+ assert.equal(ui.selectedRange(q),'1mo');assert.equal(ui.quoteStatus(q)[0],'일별 통계');assert.equal(ui.extendedPanel(q),'');
+ assert.equal(ui.quoteStatus({...q,collectedAt:new Date(Date.now()-61*60000).toISOString()})[0],'일별 통계');
+ assert.equal(ui.quoteStatus({...q,collectedAt:new Date(Date.now()-121*60000).toISOString()})[0],'갱신 지연');
+ let priorLength=0;
+ for(const range of ['1d','5d','1mo','3mo','6mo','1y','5y']){
+  ui.chartPrefs.instruments[q.id]=range;const series=ui.chartSeries(q),change=ui.selectedChange(q),html=ui.card(q);
+  assert.ok(series.length>priorLength);priorLength=series.length;
+  assert.ok(Math.abs(change.change-(q.price-series[0].v))<1e-9);assert.ok(change.basisAt);
+  assert.ok(html.includes("날짜 (KST)"));assert.ok(html.includes("신용융자 잔고 (조원)"));assert.match(html,/억원/);assert.match(html,/통계 기준일 2026-11-13/);assert.match(html,/chart-plot up/);assert.doesNotMatch(html,/프리마켓|시세 .* KST/);
+ }
+ assert.equal(ui.chartSeries(q).at(-1).v,q.price);
 });
