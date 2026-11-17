@@ -46,7 +46,7 @@ let historyActive=0,activeDetailId=null,chartPrefs={instruments:{},groups:{}};
 try{const saved=JSON.parse(localStorage.getItem('market-chart-periods-v1'));if(saved&&typeof saved.instruments==='object'&&typeof saved.groups==='object')chartPrefs=saved}catch{}
 function saveChartPrefs(){try{localStorage.setItem('market-chart-periods-v1',JSON.stringify(chartPrefs))}catch{}}
 const isCredit=q=>q.kind==='daily-statistic';
-const dateOnly=s=>s&&Number.isFinite(Date.parse(s))?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(s)):'확인 불가';
+const dateOnly=s=>s!=null&&Number.isFinite(new Date(s).getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(s)):'확인 불가';
 function creditSeries(q,range){
  const points=(q.series??[]).filter(p=>Number.isFinite(p.t)&&Number.isFinite(p.v));
  if(range==='1d')return points.slice(-2);

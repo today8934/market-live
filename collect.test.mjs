@@ -243,7 +243,7 @@ test('each card labels both sessions and ETF charts use the reference symbol and
 
 test('daily credit cards use date axes, appropriate units and selected-period changes without market sessions',()=>{
  const setup=browserSource.slice(0,browserSource.indexOf("$('#cards').addEventListener"));
- const ui=runInNewContext(setup+';({card,selectedChange,chartSeries,selectedRange,chartPrefs,quoteStatus,extendedPanel})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
+ const ui=runInNewContext(setup+';({card,selectedChange,chartSeries,selectedRange,chartPrefs,quoteStatus,extendedPanel,dateOnly})',{document:{querySelector:()=>({textContent:'{"quotes":[]}'})},location:{protocol:'https:'}});
  const rows=[];for(let d=new Date('2021-11-01T00:00Z'),i=0;d<=new Date('2026-11-13T00:00Z');d.setUTCDate(d.getUTCDate()+1),i++)if(d.getUTCDay()>0&&d.getUTCDay()<6)rows.push({TMPV1:d.toISOString().slice(0,10).replaceAll('-',''),TMPV2:20000000+i*1000,TMPV3:15000000+i*700,TMPV4:5000000+i*300});
  const q=parseCredit({ds1:rows},Date.now())[0];
  assert.equal(ui.selectedRange(q),'1mo');assert.equal(ui.quoteStatus(q)[0],'일별 통계');assert.equal(ui.extendedPanel(q),'');
@@ -253,7 +253,7 @@ test('daily credit cards use date axes, appropriate units and selected-period ch
  for(const range of ['1d','5d','1mo','3mo','6mo','1y','5y']){
   ui.chartPrefs.instruments[q.id]=range;const series=ui.chartSeries(q),change=ui.selectedChange(q),html=ui.card(q);
   assert.ok(series.length>priorLength);priorLength=series.length;
-  assert.ok(Math.abs(change.change-(q.price-series[0].v))<1e-9);assert.ok(change.basisAt);
+  assert.ok(Math.abs(change.change-(q.price-series[0].v))<1e-9);assert.ok(change.basisAt);assert.notEqual(ui.dateOnly(change.basisAt),'확인 불가');
   assert.ok(html.includes("날짜 (KST)"));assert.ok(html.includes("신용융자 잔고 (조원)"));assert.match(html,/억원/);assert.match(html,/통계 기준일 2026-11-13/);assert.match(html,/chart-plot up/);assert.doesNotMatch(html,/프리마켓|시세 .* KST/);
  }
  assert.equal(ui.chartSeries(q).at(-1).v,q.price);
